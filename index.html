@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>ProTrade - Universal Terminal v3.5</title>
+    <title>ProTrade Terminal - Stable v4.0</title>
     <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@3.8.0/dist/lightweight-charts.standalone.production.js"></script>
     <style>
         :root { --bg: #0b0e11; --sidebar: #181a20; --accent: #f0b90b; }
@@ -23,9 +23,7 @@
         <span class="label">SEARCH</span>
         <input type="text" id="symbolInput" class="tf-input" placeholder="e.g. BTC" list="symbolList" style="width: 140px;">
         <datalist id="symbolList"></datalist>
-
         <span style="color: #363a45; margin: 0 10px;">|</span>
-
         <span class="label">INTERVAL</span>
         <input type="number" id="tfValue" class="tf-input" value="7" style="width: 55px;">
         <select id="tfUnit" class="tf-select">
@@ -45,11 +43,11 @@
     let currentCandle = null;
     let ws = null;
 
-    // 1. Chart Initialisation
     const chart = LightweightCharts.createChart(document.getElementById('chart'), {
         layout: { backgroundColor: '#0b0e11', textColor: '#d1d4dc' },
         grid: { vertLines: { color: '#1f2226' }, horzLines: { color: '#1f2226' } },
         timeScale: { timeVisible: true, secondsVisible: true },
+        priceScale: { autoScale: true }, // Scale fixed
     });
 
     const candleSeries = chart.addCandlestickSeries({
@@ -59,7 +57,6 @@
 
     const getIntervalSeconds = () => (parseInt(document.getElementById('tfValue').value) || 1) * parseInt(document.getElementById('tfUnit').value);
 
-    // 2. Load Symbols for Dropdown
     function loadSymbols() {
         fetch('https://api.binance.com/api/v3/exchangeInfo')
             .then(res => res.json())
@@ -70,12 +67,10 @@
                     opt.value = s.symbol;
                     list.appendChild(opt);
                 });
-            }).catch(e => console.error("Symbol Load Error"));
+            });
     }
 
-    // 3. Main Data Fetching Logic
     async function fetchHistory() {
-        document.getElementById('price').innerText = "Loading " + currentSymbol + "...";
         const intervalSec = getIntervalSeconds();
         let binanceInt = '1m';
         if (intervalSec >= 86400) binanceInt = '1d';
@@ -89,66 +84,70 @@
             let temp = null;
             
             data.forEach(d => {
-                const t = d[0] / 1000;
-                const bucket = Math.floor(t / intervalSec) * intervalSec;
                 const p = { o: parseFloat(d[1]), h: parseFloat(d[2]), l: parseFloat(d[3]), c: parseFloat(d[4]) };
                 
-                if (!temp || temp.time !== bucket) {
-                    if (temp) aggregated.push(temp);
-                    temp = { time: bucket, open: p.o, high: p.h, low: p.l, close: p.c };
-                } else {
-                    temp.close = p.c;
-                    temp.high = Math.max(temp.high, p.h);
-                    temp.low = Math.min(temp.low, p.l);
+                // Data Filter: Skip if any price is 0 or invalid
+                if (p.o > 0 && p.c > 0) {
+                    const t = d[0] / 1000;
+                    const bucket = Math.floor(t / intervalSec) * intervalSec;
+                    
+                    if (!temp || temp.time !== bucket) {
+                        if (temp) aggregated.push(temp);
+                        temp = { time: bucket, open: p.o, high: p.h, low: p.l, close: p.c };
+                    } else {
+                        temp.close = p.c;
+                        temp.high = Math.max(temp.high, p.h);
+                        temp.low = Math.min(temp.low, p.l);
+                    }
                 }
             });
             if (temp) aggregated.push(temp);
             candleSeries.setData(aggregated);
             chart.timeScale().fitContent();
         } catch (error) {
-            document.getElementById('price').innerText = "Symbol Error!";
+            document.getElementById('price').innerText = "Error Loading Symbol";
         }
     }
 
-    // 4. Live Updates
     function startLiveStream() {
         if (ws) ws.close();
         ws = new WebSocket(`wss://stream.binance.com:9443/ws/${currentSymbol.toLowerCase()}@kline_1m`);
         
         ws.onmessage = (e) => {
             const k = JSON.parse(e.data).k;
-            const t1 = k.t / 1000;
-            const intervalSec = getIntervalSeconds();
-            const bucket = Math.floor(t1 / intervalSec) * intervalSec;
+            const p = { o: parseFloat(k.o), h: parseFloat(k.h), l: parseFloat(k.l), c: parseFloat(k.c), t: k.t / 1000 };
             
-            document.getElementById('price').innerText = "$" + parseFloat(k.c).toFixed(2);
+            if (p.c > 0) {
+                document.getElementById('price').innerText = "$" + p.c.toFixed(2);
+                const intervalSec = getIntervalSeconds();
+                const bucket = Math.floor(p.t / intervalSec) * intervalSec;
 
-            if (!currentCandle || currentCandle.time !== bucket) {
-                currentCandle = { time: bucket, open: parseFloat(k.o), high: parseFloat(k.h), low: parseFloat(k.l), close: parseFloat(k.c) };
-            } else {
-                currentCandle.close = parseFloat(k.c);
-                currentCandle.high = Math.max(currentCandle.high, parseFloat(k.h));
-                currentCandle.low = Math.min(currentCandle.low, parseFloat(k.l));
+                if (!currentCandle || currentCandle.time !== bucket) {
+                    currentCandle = { time: bucket, open: p.o, high: p.h, low: p.l, close: p.c };
+                } else {
+                    currentCandle.close = p.c;
+                    currentCandle.high = Math.max(currentCandle.high, p.h);
+                    currentCandle.low = Math.min(currentCandle.low, p.l);
+                }
+                candleSeries.update(currentCandle);
             }
-            candleSeries.update(currentCandle);
         };
     }
 
-    // Event Listeners
     document.getElementById('symbolInput').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
             let val = e.target.value.toUpperCase().trim();
-            if (val && !val.endsWith('USDT') && val.length < 5) val += "USDT";
+            if (val && !val.endsWith('USDT') && val.length < 6) val += "USDT";
             currentSymbol = val;
             fetchHistory();
             startLiveStream();
         }
     });
 
-    document.getElementById('tfValue').addEventListener('change', () => { fetchHistory(); startLiveStream(); });
-    document.getElementById('tfUnit').addEventListener('change', () => { fetchHistory(); startLiveStream(); });
+    const triggerUpdate = () => { fetchHistory(); startLiveStream(); };
+    document.getElementById('tfValue').addEventListener('change', triggerUpdate);
+    document.getElementById('tfUnit').addEventListener('change', triggerUpdate);
 
-    // Initial Kickstart
     loadSymbols();
     fetchHistory();
     startLiveStream();
