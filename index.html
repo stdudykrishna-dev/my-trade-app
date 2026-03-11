@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ProTrade - Universal Engine v3.0</title>
+    <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@3.8.0/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        :root { --bg: #0b0e11; --sidebar: #181a20; --accent: #f0b90b; --text: #d1d4dc; }
+        body { margin: 0; background: var(--bg); color: white; font-family: 'Trebuchet MS', sans-serif; overflow: hidden; }
+        
+        header { 
+            height: 60px; background: var(--sidebar); display: flex; 
+            align-items: center; padding: 0 20px; border-bottom: 1px solid #2b2f36; 
+            justify-content: space-between; 
+        }
+
+        .controls { display: flex; align-items: center; gap: 10px; }
+        
+        /* Input & Dropdown Styling */
+        .tf-input { 
+            background: #2b2f36; border: 1px solid #363a45; color: var(--accent); 
+            padding: 7px; border-radius: 4px; font-weight: bold; outline: none; 
+            text-transform: uppercase;
+        }
+        .tf-input:focus { border-color: var(--accent); }
+        
+        .tf-select { 
+            background: #2b2f36; border: 1px solid #363a45; color: white; 
+            padding: 6px; border-radius: 4px; cursor: pointer; outline: none;
+        }
+
+        #price { color: #2ebd85; font-size: 22px; font-weight: bold; letter-spacing: 1px; }
+        #chart { width: 100vw; height: calc(100vh - 60px); }
+        
+        .label { font-size: 11px; color: #848e9c; font-weight: bold; margin-right: 2px; }
+    </style>
+</head>
+<body>
+
+<header>
+    <div class="controls">
+        <span class="label">SEARCH</span>
+        <input type="text" id="symbolInput" class="tf-input" placeholder="e.g. BTC" list="symbolList" style="width: 140px;">
+        <datalist id="symbolList"></datalist>
+
+        <span style="color: #363a45; margin: 0 5px;">|</span>
+
+        <span class="label">INTERVAL</span>
+        <input type="number" id="tfValue" class="tf-input" value="7" style="width: 50px;">
+        <select id="tfUnit" class="tf-select">
+            <option value="1">Seconds</option>
+            <option value="60" selected>Minutes</option>
+            <option value="3600">Hours</option>
+            <option value="86400">Days</option>
+            <option value="604800">Weeks</option>
+        </select>
+    </div>
+    <div id="price">Syncing...</div>
+</header>
+
+<div id="chart"></div>
+
+<script>
+    // --- Configuration ---
+    let currentSymbol = "BTCUSDT";
+    let currentCandle = null;
+    let ws = null;
+
+    const chart = LightweightCharts.createChart(document.getElementById('chart'), {
+        layout: { backgroundColor: '#0b0e11', textColor: '#d1d4dc' },
+        grid: { vertLines: { color: '#1f2226' }, horzLines: { color: '#1f2226' } },
+        timeScale: { timeVisible: true, secondsVisible: true },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    });
+
+    const candleSeries = chart.addCandlestickSeries({
+        upColor: '#2ebd85', downColor: '#f6465d', borderVisible: false,
+        wickUpColor: '#2ebd85', wickDownColor: '#f6465d'
+    });
+
+    const getIntervalSeconds = () => parseInt(document.getElementById('tfValue').value) * parseInt(document.getElementById('tfUnit').value);
+
+    // --- 1. Load All Symbols for Dropdown (Auto-complete) ---
+    function loadSymbols() {
+        fetch('https://api.binance.com/api/v3/exchangeInfo')
+            .then(res => res.json())
+            .then(data => {
+                const list = document.getElementById('symbolList');
+                const usdtPairs = data.symbols.filter(s => s.symbol.endsWith('USDT'));
+                usdtPairs.forEach(s => {
+                    let opt = document.createElement('option');
+                    opt.value = s.symbol;
+                    list.appendChild(opt);
+                });
+            });
+    }
+
+    // --- 2. Symbol Search & Enter Logic ---
+    document.getElementById('symbolInput').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            let val = e.target.value.toUpperCase().trim();
+            if (val && !val.endsWith('USDT')) val += "USDT"; // Auto-append USDT
+            currentSymbol = val;
+            resetAndReload();
+        }
+    });
+
+    document.getElementById('tfValue').addEventListener('change', resetAndReload);
+    document.getElementById('tfUnit').addEventListener('change', resetAndReload);
+
+    function resetAndReload() {
+        candleSeries.setData([]);
+        currentCandle = null;
+        if (ws) ws.close();
+        fetchHistory();
+        startLiveStream();
+    }
+
+    // --- 3. Lifetime History Data Fetching ---
+    function fetchHistory() {
+        const intervalSec = getIntervalSeconds();
+        let binanceInt = '1m';
+        if (intervalSec >= 86400) binanceInt = '1d';
+        else if (intervalSec >= 3600) binanceInt = '1h';
+
+        fetch(`
