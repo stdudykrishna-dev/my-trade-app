@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>ProTrade Terminal - Stable v4.0</title>
+    <title>ProTrade Terminal - Final v4.5</title>
     <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@3.8.0/dist/lightweight-charts.standalone.production.js"></script>
     <style>
         :root { --bg: #0b0e11; --sidebar: #181a20; --accent: #f0b90b; }
@@ -47,7 +47,8 @@
         layout: { backgroundColor: '#0b0e11', textColor: '#d1d4dc' },
         grid: { vertLines: { color: '#1f2226' }, horzLines: { color: '#1f2226' } },
         timeScale: { timeVisible: true, secondsVisible: true },
-        priceScale: { autoScale: true }, // Scale fixed
+        // --- SCALE PROTECTION ---
+        priceScale: { autoScale: true, mode: 0, borderVisible: false },
     });
 
     const candleSeries = chart.addCandlestickSeries({
@@ -86,8 +87,8 @@
             data.forEach(d => {
                 const p = { o: parseFloat(d[1]), h: parseFloat(d[2]), l: parseFloat(d[3]), c: parseFloat(d[4]) };
                 
-                // Data Filter: Skip if any price is 0 or invalid
-                if (p.o > 0 && p.c > 0) {
+                // --- HARD FILTER: Price must be reasonable (not 0 or near 0) ---
+                if (p.o > 10) { 
                     const t = d[0] / 1000;
                     const bucket = Math.floor(t / intervalSec) * intervalSec;
                     
@@ -103,9 +104,11 @@
             });
             if (temp) aggregated.push(temp);
             candleSeries.setData(aggregated);
+            
+            // --- AUTO FIT ---
             chart.timeScale().fitContent();
         } catch (error) {
-            document.getElementById('price').innerText = "Error Loading Symbol";
+            document.getElementById('price').innerText = "API Error";
         }
     }
 
@@ -117,7 +120,7 @@
             const k = JSON.parse(e.data).k;
             const p = { o: parseFloat(k.o), h: parseFloat(k.h), l: parseFloat(k.l), c: parseFloat(k.c), t: k.t / 1000 };
             
-            if (p.c > 0) {
+            if (p.c > 10) {
                 document.getElementById('price').innerText = "$" + p.c.toFixed(2);
                 const intervalSec = getIntervalSeconds();
                 const bucket = Math.floor(p.t / intervalSec) * intervalSec;
@@ -137,7 +140,7 @@
     document.getElementById('symbolInput').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
             let val = e.target.value.toUpperCase().trim();
-            if (val && !val.endsWith('USDT') && val.length < 6) val += "USDT";
+            if (val && !val.endsWith('USDT')) val += "USDT";
             currentSymbol = val;
             fetchHistory();
             startLiveStream();
